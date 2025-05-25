@@ -40,8 +40,7 @@
         allowNull: true,
       },
       tags: {
-        type: DataTypes.JSON, // Adjusted for MySQL
-        defaultValue: [],
+        type: DataTypes.STRING, // Adjusted for MySQL
       },
       lastReadUser1Id: {
         type: DataTypes.INTEGER,

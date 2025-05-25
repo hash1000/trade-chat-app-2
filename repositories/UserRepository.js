@@ -3,10 +3,39 @@ const Friends = require("../models/friends");
 const User = require("../models/user");
 const { Op } = require("sequelize");
 const UserTags = require("../models/userTags");
+const { Role, UserRole } = require("../models");
 
 class UserRepository {
+
+  async assignRoleToUser(userId, roleName, transaction = null) {
+    try {
+      const role = await Role.findOne({ where: { name: roleName }, transaction });
+      if (!role) {
+        throw new Error(`Role ${roleName} not found`);
+      }
+  
+      const user = await User.findByPk(userId, { transaction });
+      if (!user) {
+        throw new Error(`User with id ${userId} not found`);
+      }
+  
+      const userRole = await UserRole.create(
+        {
+          userId: user.id,
+          roleId: role.id,
+        },
+        { transaction } // Pass the transaction object
+      );
+      return user;
+    } catch (error) {
+      console.error("Error in assignRoleToUser:", error); // Log the exact error
+      throw new Error(`Failed to assign role: ${error.message}`);
+    }
+  }
+
   // Create a new user
   async create(user) {
+    console.log("user",user);
     return User.create(user);
   }
 
@@ -18,7 +47,6 @@ class UserRepository {
           "firstName",
           "lastName",
           "username",
-          "role",
           "email",
           "phoneNumber",
           "country_code",
@@ -39,6 +67,12 @@ class UserRepository {
           "companyWalletBalance",
           "expiration_time",
         ],
+        include: [
+          {
+            model: Role,
+            as: "roles"
+          },
+        ]
       });
       return users.map((user) => user.toJSON());
     } catch (error) {
@@ -48,11 +82,27 @@ class UserRepository {
 
   // Get a user by ID
   async getById(userId) {
-    return User.findByPk(userId);
+    console.log("repos");
+    return await User.findByPk(userId, {
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
+    });
   }
 
   async getUserTokenAndName(userId) {
-    return User.findByPk(userId, { attributes: ["id", "name", "fcm"] });
+    return User.findByPk(userId, {
+      include: [
+        {
+          model: Role,
+          as: "roles",
+        },
+      ],
+      attributes: ["id", "name", "fcm"]
+    });
   }
 
   async getUserProfile(id) {
@@ -63,7 +113,6 @@ class UserRepository {
         "firstName",
         "lastName",
         "username",
-        "role",
         "email",
         "phoneNumber",
         "country_code",
@@ -85,6 +134,12 @@ class UserRepository {
         "companyWalletBalance",
         "expiration_time",
       ],
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
     });
     return user ? user.toJSON() : null;
   }
@@ -97,7 +152,6 @@ class UserRepository {
         "firstName",
         "lastName",
         "username",
-        "role",
         "email",
         "phoneNumber",
         "country_code",
@@ -119,6 +173,12 @@ class UserRepository {
         "companyWalletBalance",
         "expiration_time",
       ],
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
     });
     return user ? user.toJSON() : null;
   }
@@ -127,6 +187,12 @@ class UserRepository {
     const user = await User.findOne({
       where: { id },
       attributes: ["id", "likes", "dislikes"],
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
     });
 
     return user ? user.toJSON() : null;
@@ -142,17 +208,39 @@ class UserRepository {
       where: {
         id: userIds,
       },
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
     });
   }
 
   // Get a user by email
   async getByEmail(email) {
-    return User.findOne({ where: { email } });
+    return User.findOne({ 
+      where: { email },
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
+    });
   }
 
   // Get a user by phoneNumber
   async getByPhoneNumber(country_code, phoneNumber) {
-    return User.findOne({ where: { country_code, phoneNumber } });
+    return User.findOne({ 
+      where: { country_code, phoneNumber },
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
+    });
   }
 
   // Update a user
@@ -185,7 +273,15 @@ class UserRepository {
 
   async getUserByResetToken(resetToken) {
     // Find a user by the reset token in the database
-    return User.findOne({ where: { resetToken } });
+    return User.findOne({ 
+      where: { resetToken },
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
+    });
   }
 
   async updateUserPassword(email, newPassword) {
@@ -213,6 +309,12 @@ class UserRepository {
       where,
       limit,
       offset,
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
     });
 
     const userIds = users.rows.map((user) => user.id);
@@ -269,12 +371,17 @@ class UserRepository {
       attributes: [
         "id",
         "name",
-        "role",
         "country_code",
         "email",
         "phoneNumber",
         "profilePic",
       ],
+      include: [
+        {
+          model: Role,
+          as: "roles"
+        },
+      ]
     });
 
     users = users.filter((user) => {
@@ -312,15 +419,15 @@ class UserRepository {
       const userTag = await UserTags.findOne({
         where: { userId: user.id },
       });
-  
+
       // Check if user tags exist; return default values if not found
       if (!userTag) {
         return {
           message: "No tags found for this user",
-          tags: [],
+          tags: "",
         };
       }
-  
+
       // Return found tags
       return userTag;
     } catch (error) {
@@ -328,7 +435,6 @@ class UserRepository {
       throw new Error("Error while fetching tags: " + error.message);
     }
   }
-  
 }
 
 module.exports = UserRepository;

@@ -12,9 +12,8 @@ module.exports = {
       },
       
       tags: {
-        type: Sequelize.JSON, // Use JSON to store arrays
-        allowNull: false,
-        defaultValue: [], // Default to an empty array
+        type: Sequelize.STRING, // Use JSON to store arrays
+        allowNull: false, // Default to an empty array
       },
       userId: {
         type: Sequelize.INTEGER,

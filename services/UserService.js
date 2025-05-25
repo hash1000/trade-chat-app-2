@@ -6,26 +6,41 @@ const ChatRepository = require("../repositories/ChatRepository");
 const PaymentService = require("./PaymentService");
 const UserFavouriteRepository = require("../repositories/UserFavouriteRepository");
 const UserTags = require("../models/userTags");
-
+const UserRole = require("../models/userRole");
+const { User, Role } = require("../models");
+const sequelize = require("../config/database");
 const userRepository = new UserRepository();
-const chat = new ChatRepository()
-const payment = new PaymentService()
-const UserFavourite = new UserFavouriteRepository()
+const chat = new ChatRepository();
+const payment = new PaymentService();
+const UserFavourite = new UserFavouriteRepository();
 
 class UserService {
   async createUser(userData) {
+    let transaction;
     try {
+      transaction = await sequelize.transaction();
       const { password, ...data } = userData;
       const hashedPassword = await bcrypt.hash(password, 10);
-      const newUser = await userRepository.create({
-        password: hashedPassword,
-        ...data, // Spread the rest of the user data
-      });
+
+      const newUser = await userRepository.create(
+        {
+          password: hashedPassword,
+          ...data,
+        },
+        { transaction }
+      );
+
+      await userRepository.assignRoleToUser(newUser.id, "user", transaction);
+
+      await transaction.commit();
       return newUser;
     } catch (error) {
-      throw new Error("Failed to create user");
+      if (transaction) await transaction.rollback();
+      console.error("Error in createUser:", error);
+      throw new CustomError(`Failed to create user: ${error.message}`, 500);
     }
   }
+
   async updateGoogleUser(user, userData) {
     try {
       // Update user properties
@@ -51,7 +66,7 @@ class UserService {
       if (userData.gender) {
         user.gender = userData.gender;
       }
-      if(userData.settings) {
+      if (userData.settings) {
         user.settings = userData.settings;
       }
       if (userData.country) {
@@ -76,14 +91,24 @@ class UserService {
   }
 
   async createGoogleUser(userData) {
+    let transaction;
     try {
+      transaction = await sequelize.transaction();
       const { password, ...data } = userData;
-      const newUser = await userRepository.create({
-        password: "",
-        ...data, // Spread the rest of the user data
-      });
+      const newUser = await userRepository.create(
+        {
+          password: "",
+          ...data,
+        },
+        { transaction }
+      );
+      await userRepository.assignRoleToUser(newUser.id, "user", transaction);
+
+      // Commit the transaction
+      await transaction.commit();
       return newUser;
     } catch (error) {
+      if (transaction) await transaction.rollback();
       throw new Error("Failed to create user");
     }
   }
@@ -124,27 +149,40 @@ class UserService {
           let userTag = await UserTags.findOne({
             where: { userId: user.id },
           });
-      
-          let tagArr = []; // Array to hold all tags
-      
+
+          let tagArr = ""; // Array to hold all tags
+
+          const existingTags = user.settings?.tags || "";
+          const incomingTags = profileData.settings.tags || "";
+
+          tagArr = existingTags + "," + incomingTags;
+
+          const repeatedArr = tagArr.split(","); // string to array seperated with ,
+
+          tagArr = repeatedArr
+            .filter(function (value, index, self) {
+              return self.indexOf(value) === index;
+            })
+            .join(",");
           // Combine tags from profileData and existing user settings
-          const incomingTags = profileData.settings.tags || [];
-          const existingTags = user.settings?.tags || [];
-          tagArr.push(...incomingTags, ...existingTags);
-      
+          // tagArr.push(...incomingTags, ...existingTags);
+
           // Remove duplicates
-          tagArr = [...new Set(tagArr)];
-      
+          // tagArr = [...new Set(tagArr)];
+
           // Save or update the UserTags table
           if (userTag) {
-            await userTag.update({
-              tags: tagArr,
-              updatedAt: new Date(),
-            },{
-              where: {
-                userId: user.id
+            await userTag.update(
+              {
+                tags: tagArr,
+                updatedAt: new Date(),
               },
-            });
+              {
+                where: {
+                  userId: user.id,
+                },
+              }
+            );
           } else {
             await UserTags.create({
               userId: user.id,
@@ -153,7 +191,7 @@ class UserService {
               updatedAt: new Date(),
             });
           }
-      
+
           // Update user settings with merged tags
           //dectructure only which has more key value in object
           user.settings = {
@@ -161,28 +199,82 @@ class UserService {
             ...profileData.settings, // Update with profileData settings
             tags: tagArr, // Set updated tags
           };
-      
+
           // Save the updated user object (ensure you have a save method for the user entity)
           await user.save();
         }
       }
-      
-      
+
       if (profileData.profilePic) {
         user.profilePic = profileData.profilePic;
       }
       if (profileData.description) {
         user.description = profileData.description;
       }
-   // Save both user and requesteeUser
-   await user.save(); // Save the main user
- 
+      // Save both user and requesteeUser
+      await user.save(); // Save the main user
+
       return user;
     } catch (error) {
       throw new Error(`Failed to update user profile: ${error.message}`);
     }
   }
-  async updatePhoneNumber(user,userData) {
+
+  async updateUserRole(user, roleName) {
+    try {
+      // Check if the role exists
+      const role = await Role.findOne({ where: { name: roleName } });
+      if (!role) {
+        throw new Error("Role not found");
+      }
+
+      // Check if the user already has this role
+      const existingUserRole = await UserRole.findOne({
+        where: { userId: user.id, roleId: role.id },
+      });
+      if (existingUserRole) {
+        return { message: "User already has this role", user };
+      }
+      // Update the user's role
+      await UserRole.update(
+        {
+          roleId: role.id,
+        },
+        {
+          where: {
+            userId: user.id,
+          },
+        }
+      );
+
+      // Fetch the updated user with their roles
+      const updatedUser = await User.findByPk(user.id, {
+        include: [
+          {
+            model: Role,
+            as: "roles",
+          },
+        ],
+      });
+      return { message: "Role assigned successfully", user: updatedUser };
+    } catch (error) {
+      throw new Error(`Error updating roles: ${error.message}`);
+    }
+  }
+
+  async getUserWithRoles(userId) {
+    return User.findByPk(userId, {
+      include: [
+        {
+          model: Role,
+          through: { attributes: [] },
+          attributes: ["name"],
+        },
+      ],
+    });
+  }
+
+  async updatePhoneNumber(user, userData) {
     try {
       // Update user properties
       if (userData.phoneNumber) {
@@ -192,20 +284,20 @@ class UserService {
         user.country_code = userData.country_code;
       }
       await user.save();
-  
+
       return user;
     } catch (error) {
       throw new Error(`Failed to update  user phoneNumber: ${error.message}`);
     }
   }
-  async updateEmail(user,userData) {
+  async updateEmail(user, userData) {
     try {
       // Update user properties
       if (userData.email) {
         user.email = userData.email;
       }
       await user.save();
-  
+
       return user;
     } catch (error) {
       throw new Error(`Failed to update  user phoneNumber: ${error.message}`);
@@ -221,7 +313,7 @@ class UserService {
   }
 
   async getUserById(userId) {
-    return userRepository.getById(userId);
+    return await userRepository.getById(userId);
   }
 
   async getUserByEmail(email) {
@@ -231,9 +323,9 @@ class UserService {
   // delete User
   async deleteUser(userId) {
     // Call the UserRepository to get a user by email
-    await payment.cancelPaymentRelation(userId,userId);
-    await UserFavourite.cancelUserFavourite(userId,userId);
-    await chat.cancelInvite(userId,userId);
+    await payment.cancelPaymentRelation(userId, userId);
+    await UserFavourite.cancelUserFavourite(userId, userId);
+    await chat.cancelInvite(userId, userId);
     return userRepository.delete(userId);
   }
 
@@ -299,7 +391,6 @@ class UserService {
           "firstName",
           "lastName",
           "username",
-          "role",
           "email",
           "phoneNumber",
           "country_code",
